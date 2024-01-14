@@ -2,19 +2,20 @@ package main
 
 import (
 	"context"
-	"fmt"
-	"time"
-	"flag"
-	"math/rand"
-	"io"
-	"os"
-	"os/signal"
-	"syscall"
-	"runtime"
 	"encoding/base64"
 	"encoding/json"
-	
+	"flag"
+	"fmt"
+	"io"
+	"math/rand"
+	"os"
+	"os/signal"
+	"runtime"
+	"syscall"
+	"time"
+
 	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/registry"
 	"github.com/docker/docker/client"
 	"github.com/rs/zerolog/log"
@@ -23,17 +24,19 @@ import (
 func main() {
 
 	// OS check
-	fmt.Printf("Running in %s\n",runtime.GOOS)
+	fmt.Printf("Running in %s\n", runtime.GOOS)
 	if runtime.GOOS == "windows" {
 		setUpInWindows()
-	} else if runtime.GOOS == "linux"{		
+	} else if runtime.GOOS == "linux" {
 		setUpInLinux()
+	} else if runtime.GOOS == "darwin" {
+		setUpInDarwin()
 	}
 
 	// load command line arguments
-	name := flag.String("name","world","name to print")
+	name := flag.String("name", "world", "name to print")
 	flag.Parse()
-	fmt.Printf("Starting sleepservice for %s\n",*name)
+	fmt.Printf("Starting sleepservice for %s\n", *name)
 
 	// setup signal catching
 	sigs := make(chan os.Signal, 1)
@@ -44,18 +47,18 @@ func main() {
 	// method invoked upon seeing signal
 	go func() {
 		s := <-sigs
-		fmt.Printf("RECEIVED SIGNAL: %s\n",s)
+		fmt.Printf("RECEIVED SIGNAL: %s\n", s)
 		AppCleanup()
 		os.Exit(1)
 	}()
 
 	// infinite print loop
 	for {
-		fmt.Printf("hello %s",*name)
-		
+		fmt.Printf("hello %s", *name)
+
 		// wait random number of milliseconds
 		Nsecs := rand.Intn(3000)
-		fmt.Printf("About to sleep %dms before looping again\n",Nsecs)
+		fmt.Printf("About to sleep %dms before looping again\n", Nsecs)
 		time.Sleep(time.Millisecond * time.Duration(Nsecs))
 	}
 }
@@ -72,13 +75,13 @@ func setUpInWindows() {
 		panic(err)
 	}
 
-    //Docker api 호출하여 사용
+	//Docker api 호출하여 사용
 	containers, err := cli.ContainerList(ctx, types.ContainerListOptions{})
 	if err != nil {
 		panic(err)
 	}
 
-    //결과값 출력
+	//결과값 출력
 	for _, container := range containers {
 		fmt.Println(container.ID)
 	}
@@ -94,51 +97,81 @@ func setUpInLinux() {
 		panic(err)
 	}
 
-    //Docker api 호출하여 사용
+	//Docker api 호출하여 사용
 	containers, err := cli.ContainerList(ctx, types.ContainerListOptions{})
 	if err != nil {
 		panic(err)
 	}
 
-    //결과값 출력
+	//결과값 출력
 	for _, container := range containers {
 		fmt.Println(container.ID)
 	}
 }
 
+func setUpInDarwin() {
+	ctx := context.Background()
+	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	if err != nil {
+		panic(err)
+	}
+	defer cli.Close()
+
+	imageName := "public.ecr.aws/u4s3m9m2/awstestweb:0.1"
+
+	out, err := cli.ImagePull(ctx, imageName, types.ImagePullOptions{})
+	if err != nil {
+		panic(err)
+	}
+	defer out.Close()
+	io.Copy(os.Stdout, out)
+
+	resp, err := cli.ContainerCreate(ctx, &container.Config{
+		Image: imageName,
+	}, nil, nil, nil, "")
+	if err != nil {
+		panic(err)
+	}
+
+	if err := cli.ContainerStart(ctx, resp.ID, types.ContainerStartOptions{}); err != nil {
+		panic(err)
+	}
+
+	fmt.Println(resp.ID)
+}
 
 func ImagePullHarbor(img string) error {
 	ctx := context.Background()
-  
+
 	authConfig := registry.AuthConfig{
-	  Username:      "harbor_registry_username",
-	  Password:      "harbor_registry_password",
-	  ServerAddress: "harbor_registry_url",
+		Username:      "harbor_registry_username",
+		Password:      "harbor_registry_password",
+		ServerAddress: "harbor_registry_url",
 	}
-  
+
 	encodedJSON, err := json.Marshal(authConfig)
 	if err != nil {
-	  panic(err)
+		panic(err)
 	}
-  
+
 	authStr := base64.URLEncoding.EncodeToString(encodedJSON)
-	
+
 	// docker client is use to pull the image.
 	dockerCli, err := newDockerClient()
 	if err != nil {
-	  log.Error().Msgf("failed to create docker client: %w", err)
-	  return err
+		log.Error().Msgf("failed to create docker client: %w", err)
+		return err
 	}
-  
+
 	out, err := dockerCli.ImagePull(ctx, img, types.ImagePullOptions{RegistryAuth: authStr})
 	if err != nil {
-	  return fmt.Errorf("failed to pull image: %w", err)
+		return fmt.Errorf("failed to pull image: %w", err)
 	}
 	defer out.Close()
-  
+
 	_, err = io.Copy(os.Stdout, out)
 	if err != nil {
-	  return fmt.Errorf("failed to read image logs: %w", err)
+		return fmt.Errorf("failed to read image logs: %w", err)
 	}
 	return err
 }
